@@ -38,7 +38,7 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run pyright
-        uses: jakebailey/pyright-action@v2
+        uses: jakebailey/pyright-action@v3
 
   ruff:
     name: ruff
