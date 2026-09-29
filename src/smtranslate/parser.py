@@ -364,9 +364,11 @@ def run(
                     continue
                 for translation in phrase.translations:
                     if translation.langid != langid:
+                        # SourceMod only reads the folder's language from this file
                         checker.report(
-                            Severity.WARNING,
-                            f"Includes a translation for {checker.language_name(translation.langid)}",
+                            Severity.ERROR,
+                            f"Uses the {checker.language_name(translation.langid)} key in the "
+                            f"{checker.language_name(langid)} folder, SourceMod will ignore it",
                             file,
                             translation.line,
                             translation.langid,

@@ -66,6 +66,6 @@ jobs:
         run: |
           set -x
           [ "$VALID_ERRORS" = "0" ]
-          [ "$INVALID_ERRORS" = "5" ]
-          [ "$INVALID_WARNINGS" = "7" ]
+          [ "$INVALID_ERRORS" = "6" ]
+          [ "$INVALID_WARNINGS" = "6" ]
           [ "$MISSING_ERRORS" = "0" ]

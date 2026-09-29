@@ -53,7 +53,7 @@ def test_github_format(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) 
         '[en] "Welcome": Uses {2} but "#format" only declares 1 parameter(s)'
     ) in result.output
     assert "::warning file=invalid/xx,title=smtranslate::" in result.output
-    assert outputs.read_text() == "errors=5\nwarnings=7\n"
+    assert outputs.read_text() == "errors=6\nwarnings=6\n"
     markdown = summary.read_text(encoding="utf-8")
     assert (
         "https://github.com/srcdslab/example/blob/abc123/invalid/plugin.phrases.txt#L6"

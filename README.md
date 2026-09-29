@@ -16,7 +16,8 @@ SourceMod translation linter. It supports both translation layouts, which can al
 | error | Invalid `#format`, or a translation using a `{N}` parameter not declared in `#format` |
 | warning | Translation not using every `#format` parameter, or using `{N}` without `#format` |
 | warning | Missing translations for the expected languages (see `--languages`) |
-| warning | Language subfolder issues: unknown folder, file or phrase not in English, `#format` key, translation for another language, translation also defined inline |
+| error | Language subfolder file using another language key (e.g. `"en"` in `th/`), which SourceMod ignores |
+| warning | Language subfolder issues: unknown folder, file or phrase not in English, `#format` key, translation also defined inline |
 
 ## GitHub Action
 

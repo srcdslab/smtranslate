@@ -67,16 +67,10 @@ def test_invalid_folder() -> None:
         ("plugin.phrases.txt", 10, None, "Welcome", "Duplicate phrase"),
         ("plugin.phrases.txt", 14, None, "NoEnglish", "Missing English"),
         ("plugin.phrases.txt", 17, "frr", "NoEnglish", 'Unknown language "frr"'),
+        ("plugin.phrases.txt", 6, "en", "NoFormat", "Uses the English (en) key"),
     }
     expected_warnings = {
         ("plugin.phrases.txt", 5, "de", "NoFormat", '"#format" key'),
-        (
-            "plugin.phrases.txt",
-            6,
-            "en",
-            "NoFormat",
-            "Includes a translation for English",
-        ),
         ("plugin.phrases.txt", 8, "de", "Unknown", "doesn't exist in English"),
         (
             "plugin.phrases.txt",
