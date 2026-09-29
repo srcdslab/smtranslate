@@ -1,0 +1,71 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.13']
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+
+      - name: Run pytest
+        run: pytest
+
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check valid translations
+        id: valid
+        uses: ./
+        with:
+          path: tests/fixtures/valid
+
+      - name: Check invalid translations
+        id: invalid
+        uses: ./
+        with:
+          path: tests/fixtures/invalid
+          fail-on: never
+
+      - name: Check missing translations folder
+        id: missing
+        uses: ./
+
+      - name: Verify outputs
+        env:
+          VALID_ERRORS: ${{ steps.valid.outputs.errors }}
+          INVALID_ERRORS: ${{ steps.invalid.outputs.errors }}
+          INVALID_WARNINGS: ${{ steps.invalid.outputs.warnings }}
+          MISSING_ERRORS: ${{ steps.missing.outputs.errors }}
+        run: |
+          set -x
+          [ "$VALID_ERRORS" = "0" ]
+          [ "$INVALID_ERRORS" = "5" ]
+          [ "$INVALID_WARNINGS" = "7" ]
+          [ "$MISSING_ERRORS" = "0" ]

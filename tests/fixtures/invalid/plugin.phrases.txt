@@ -1,0 +1,24 @@
+"Phrases"
+{
+	"Welcome"
+	{
+		"#format"	"{1:N}"
+		"en"		"Welcome {1}, you have {2} credits."
+		"de"		"Willkommen!"
+		"fr"		"Bienvenue {1}"
+	}
+	"Welcome"
+	{
+		"en"		"Duplicate"
+	}
+	"NoEnglish"
+	{
+		"fr"		"Pas d'anglais"
+		"frr"		"Typo"
+	}
+	"NoFormat"
+	{
+		"en"		"Hello {1}"
+		"de"		"Hallo"
+	}
+}

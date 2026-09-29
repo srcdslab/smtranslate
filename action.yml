@@ -1,0 +1,93 @@
+name: SourceMod translations check
+description: Lint SourceMod translation files (syntax, missing translations, format parameters) and report issues as annotations and a job summary.
+author: srcdslab
+
+branding:
+  icon: globe
+  color: blue
+
+inputs:
+  path:
+    description: Path to the SourceMod translations folder.
+    required: false
+    default: addons/sourcemod/translations
+  languages:
+    description: >-
+      Languages every phrase must be translated to: "detected" (languages already used
+      in the folder), "all" (every language in languages.cfg) or a comma-separated list
+      of language ids (e.g. "fr,ru,zho").
+    required: false
+    default: detected
+  fail-on:
+    description: 'Fail the step when issues of this severity (or worse) are found: "error", "warning" or "never".'
+    required: false
+    default: error
+  config-folder:
+    description: Custom configuration folder (config.yml and languages.cfg). Defaults to the bundled one.
+    required: false
+    default: ""
+  python-version:
+    description: Python version used to run smtranslate.
+    required: false
+    default: "3.11"
+
+outputs:
+  errors:
+    description: Number of errors found.
+    value: ${{ steps.check.outputs.errors || '0' }}
+  warnings:
+    description: Number of warnings found.
+    value: ${{ steps.check.outputs.warnings || '0' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Look for translations
+      id: find
+      shell: bash
+      env:
+        TRANSLATIONS_PATH: ${{ inputs.path }}
+      run: |
+        if [ -d "$TRANSLATIONS_PATH" ]; then
+          echo "found=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::notice title=smtranslate::No translations folder found at '$TRANSLATIONS_PATH', skipping."
+          echo "found=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Set up Python
+      if: steps.find.outputs.found == 'true'
+      uses: actions/setup-python@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+        update-environment: false
+      id: python
+
+    - name: Install smtranslate
+      if: steps.find.outputs.found == 'true'
+      shell: bash
+      env:
+        PYTHON: ${{ steps.python.outputs.python-path }}
+        VENV: ${{ runner.temp }}/smtranslate-venv
+      run: |
+        "$PYTHON" -m venv "$VENV"
+        bin="$VENV/bin"
+        [ -d "$bin" ] || bin="$VENV/Scripts"
+        echo "SMTRANSLATE_BIN=$bin" >> "$GITHUB_ENV"
+        "$bin/python" -m pip install --quiet --disable-pip-version-check "$GITHUB_ACTION_PATH"
+
+    - name: Check translations
+      if: steps.find.outputs.found == 'true'
+      id: check
+      shell: bash
+      env:
+        TRANSLATIONS_PATH: ${{ inputs.path }}
+        LANGUAGES: ${{ inputs.languages }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        CONFIG_FOLDER: ${{ inputs.config-folder }}
+      run: |
+        args=(check --translation-folder "$TRANSLATIONS_PATH" --languages "$LANGUAGES" --fail-on "$FAIL_ON" --format github)
+        if [ -n "$CONFIG_FOLDER" ]; then
+          args+=(--config-folder "$CONFIG_FOLDER")
+        fi
+        "$SMTRANSLATE_BIN/smtranslate" "${args[@]}"

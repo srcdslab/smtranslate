@@ -1,0 +1,12 @@
+"Phrases"
+{
+	"NoFormat"
+	{
+		"#format"	"{1:s}"
+		"en"		"Wrong language"
+	}
+	"Unknown"
+	{
+		"de"		"Unbekannt"
+	}
+}

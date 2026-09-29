@@ -4,5 +4,7 @@
 #
 #    pip-compile --no-emit-index-url pyproject.toml
 #
-vdf==3.4
+click==8.5.0
+    # via smtranslate (pyproject.toml)
+pyyaml==6.0.3
     # via smtranslate (pyproject.toml)

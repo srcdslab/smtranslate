@@ -15,7 +15,6 @@ requires-python = ">=3.11"
 dependencies = [
     "click",
     "pyyaml",
-    "vdf"
 ]
 
 [project.scripts]
@@ -29,6 +28,9 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 exclude = ["*.tests", "*.tests.*", "tests.*", "tests"]
 
+[tool.setuptools.package-data]
+smtranslate = ["config/*"]
+
 [tool.setuptools.dynamic]
 version = {file = "VERSION"}
 
@@ -37,6 +39,7 @@ dev = [
     "bandit",
     "pip-tools",
     "pyright",
+    "pytest",
     "pyupgrade",
     "ruff",
 ]
@@ -45,5 +48,6 @@ dev = [
 exclude_dirs = ["./.git", "./documentation", "./tests", "./.venv", "./build"]
 skips = []
 
-[tool.pytest.ini_config]
+[tool.pytest.ini_options]
 log_level = "INFO"
+testpaths = ["tests"]

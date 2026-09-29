@@ -1,0 +1,8 @@
+"Phrases"
+{
+	/* Translations in a language subfolder */
+	"Goodbye"
+	{
+		"fr"		"Au revoir !"
+	}
+}
