@@ -13,10 +13,11 @@ SourceMod translation linter. It supports both translation layouts, which can al
 | error | Duplicate phrases, or duplicate translations inside a phrase |
 | error | Unknown language ids (not in [languages.cfg](src/smtranslate/config/languages.cfg)) |
 | error | Phrase without an English (`en`) translation |
-| error | Invalid `#format`, or a translation using a `{N}` parameter not declared in `#format` |
+| error | Invalid `#format`, or a translation using a `{N}` parameter not declared in `#format` (SourceMod prints it as is) |
+| error | A translation using the same `{N}` parameter twice (SourceMod only replaces the first one) |
 | warning | Translation not using every `#format` parameter, or using `{N}` without `#format` |
 | warning | Missing translations for the expected languages (see `--languages`) |
-| error | Language subfolder file using another language key (e.g. `"en"` in `th/`), which SourceMod ignores |
+| error | Language subfolder file using another language key (e.g. `"en"` in `th/`): SourceMod loads it as that language |
 | warning | Language subfolder issues: unknown folder, file or phrase not in English, `#format` key, translation also defined inline |
 
 ## GitHub Action

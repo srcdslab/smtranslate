@@ -67,7 +67,8 @@ def test_invalid_folder() -> None:
         ("plugin.phrases.txt", 10, None, "Welcome", "Duplicate phrase"),
         ("plugin.phrases.txt", 14, None, "NoEnglish", "Missing English"),
         ("plugin.phrases.txt", 17, "frr", "NoEnglish", 'Unknown language "frr"'),
-        ("plugin.phrases.txt", 6, "en", "NoFormat", "Uses the English (en) key"),
+        ("plugin.phrases.txt", 6, "en", "NoFormat", "loads it as the en translation"),
+        ("plugin.phrases.txt", 22, "en", "Repeated", "Uses {1} more than once"),
     }
     expected_warnings = {
         ("plugin.phrases.txt", 5, "de", "NoFormat", '"#format" key'),
@@ -79,8 +80,8 @@ def test_invalid_folder() -> None:
             "Welcome",
             "Does not use format parameter(s) {1}",
         ),
-        ("plugin.phrases.txt", 19, "fr", "NoFormat", "Missing French (fr) translation"),
-        ("plugin.phrases.txt", 21, "en", "NoFormat", 'no "#format"'),
+        ("plugin.phrases.txt", 26, "fr", "NoFormat", "Missing French (fr) translation"),
+        ("plugin.phrases.txt", 28, "en", "NoFormat", 'no "#format"'),
         ("xx", None, None, None, "not a known language folder"),
     }
     for expected, severity in [

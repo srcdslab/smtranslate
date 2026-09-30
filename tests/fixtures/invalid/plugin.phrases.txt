@@ -16,6 +16,13 @@
 		"fr"		"Pas d'anglais"
 		"frr"		"Typo"
 	}
+	"Repeated"
+	{
+		"#format"	"{1:s}"
+		"en"		"{1} and {1}"
+		"de"		"{1}"
+		"fr"		"{1}"
+	}
 	"NoFormat"
 	{
 		"en"		"Hello {1}"

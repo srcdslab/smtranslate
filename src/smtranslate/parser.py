@@ -10,7 +10,8 @@ from smtranslate.keyvalues import KVNode, KVSyntaxError, parse
 
 logger = logging.getLogger(__name__)
 
-PARAM_REGEX = re.compile(r"\{([0-9]+)\}")
+# Like SourceMod: "{" + index + any ASCII up to "}", so "{1}" and "{1:N}" are both parameter 1
+PARAM_REGEX = re.compile(r"\{([0-9]+)[\x00-\x7c\x7e\x7f]*\}")
 FORMAT_REGEX = re.compile(r"\{([0-9]+):[^{}]+\}")
 FORMAT_FULL_REGEX = re.compile(r"^\{[0-9]+:[^{}]+\}(,\{[0-9]+:[^{}]+\})*$")
 
@@ -180,12 +181,14 @@ class Checker:
                     child.key,
                     phrase.key,
                 )
+            params = [int(x) for x in PARAM_REGEX.findall(child.value)]
             phrase.translations.append(
                 Translation(
                     child.key,
                     child.value,
                     child.line,
-                    {int(x) for x in PARAM_REGEX.findall(child.value)},
+                    set(params),
+                    {x for x in params if params.count(x) > 1},
                 )
             )
         return phrase
@@ -217,11 +220,23 @@ class Checker:
             return
 
         declared = set(format_params)
+        repeated = translation.repeated_params & declared
+        if repeated:
+            self.report(
+                Severity.ERROR,
+                f"Uses {fmt(repeated)} more than once, SourceMod only replaces the "
+                "first one and shows the others as is",
+                file,
+                translation.line,
+                translation.langid,
+                phrase_key,
+            )
         undeclared = translation.params - declared
         if undeclared:
             self.report(
                 Severity.ERROR,
-                f'Uses {fmt(undeclared)} but "#format" only declares {len(declared)} parameter(s)',
+                f'Uses {fmt(undeclared)} but "#format" only declares {len(declared)} '
+                "parameter(s), SourceMod shows it as is",
                 file,
                 translation.line,
                 translation.langid,
@@ -364,16 +379,19 @@ def run(
                     continue
                 for translation in phrase.translations:
                     if translation.langid != langid:
-                        # SourceMod only reads the folder's language from this file
-                        checker.report(
-                            Severity.ERROR,
-                            f"Uses the {checker.language_name(translation.langid)} key in the "
-                            f"{checker.language_name(langid)} folder, SourceMod will ignore it",
-                            file,
-                            translation.line,
-                            translation.langid,
-                            phrase.key,
-                        )
+                        # SourceMod reads the language from the key, not from the folder.
+                        # Unknown keys are ignored and already reported.
+                        if translation.langid in known_languages:
+                            checker.report(
+                                Severity.ERROR,
+                                f"Uses the {checker.language_name(translation.langid)} key in "
+                                f"the {checker.language_name(langid)} folder, SourceMod loads it "
+                                f"as the {translation.langid} translation",
+                                file,
+                                translation.line,
+                                translation.langid,
+                                phrase.key,
+                            )
                         continue
                     if base_phrase.get(langid) is not None:
                         checker.report(

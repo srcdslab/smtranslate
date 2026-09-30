@@ -4,7 +4,7 @@
 	"Welcome"
 	{
 		"#format"	"{1:N},{2:d}"
-		"en"		"{green}Welcome {1}, you have {2} credits."
+		"en"		"{green}Welcome {1:N}, you have {2} credits."
 		"fr"		"{green}Bienvenue {1}, tu as {2} crédits."
 	}
 	"Goodbye"

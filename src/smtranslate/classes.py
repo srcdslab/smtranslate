@@ -8,6 +8,7 @@ class Translation:
     translation: str
     line: int
     params: set[int] = field(default_factory=set)
+    repeated_params: set[int] = field(default_factory=set)
 
 
 @dataclass
