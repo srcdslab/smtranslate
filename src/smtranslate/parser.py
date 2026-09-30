@@ -1,235 +1,452 @@
 #!/usr/bin/python3
 # Copyright (c) 2023 Peace-Maker
-from collections import defaultdict
 import logging
 import pathlib
 import re
-import vdf
+from dataclasses import dataclass, field
 
-from smtranslate.classes import Language, Phrase, PhraseFile, Report, Translation
+from smtranslate.classes import Phrase, PhraseFile, Report, Severity, Translation
+from smtranslate.keyvalues import KVNode, KVSyntaxError, parse
 
 logger = logging.getLogger(__name__)
 
+# Like SourceMod: "{" + index + any ASCII up to "}", so "{1}" and "{1:N}" are both parameter 1
+PARAM_REGEX = re.compile(r"\{([0-9]+)[\x00-\x7c\x7e\x7f]*\}")
+FORMAT_REGEX = re.compile(r"\{([0-9]+):[^{}]+\}")
+FORMAT_FULL_REGEX = re.compile(r"^\{[0-9]+:[^{}]+\}(,\{[0-9]+:[^{}]+\})*$")
 
-def parse_translations(path: str):
-    param_regex = re.compile(r"\{[0-9]+\}", re.MULTILINE)
-    units = []
-    for file in pathlib.Path(path).glob("*.txt"):
-        logger.debug(f"Parsing {file}")
-        if not file.is_file():
-            continue
-
-        try:
-            phrases = vdf.loads(file.read_text("utf-8"))
-        except Exception as ex:
-            file_path = str(file)
-            index = file_path.find("translations")
-            if index != -1:
-                file_path = file_path[index:]
-            logger.error(f"Error parsing {file_path}: {ex}")
-            units.append(PhraseFile(file.name, [], str(ex)))
-            continue
-
-        if "Phrases" not in phrases:
-            logger.error(f'File {file.name} does not start with a "Phrases" section')
-            continue
-
-        parsed_phrases = []
-        for phrase_ident, raw_translations in phrases["Phrases"].items():
-            translations = []
-            format_special = None
-            for child_langid, translation in raw_translations.items():
-                if child_langid == "#format":
-                    format_special = Translation(
-                        child_langid, translation, translation.count(",") + 1
-                    )
-                else:
-                    translations.append(
-                        Translation(
-                            child_langid,
-                            translation,
-                            len(param_regex.findall(translation)),
-                        )
-                    )
-            parsed_phrases.append(Phrase(phrase_ident, format_special, translations))
-        units.append(PhraseFile(file.name, parsed_phrases))
-    return units
+DETECTED = "detected"
+ALL = "all"
 
 
-def run(*, language_cfg_path: str, translation_folder_path: str) -> None:
-    # Parse the languages.cfg file to know which languages could be available
-    logger.info("Parsing languages.cfg...")
-    available_languages: dict[str, Language] = {}
-    languages_cfg = vdf.loads(pathlib.Path(language_cfg_path).read_text("utf-8"))
-    for langid, lang in languages_cfg["Languages"].items():
-        available_languages[langid] = Language(langid, lang, [])
+@dataclass
+class Result:
+    reports: list[Report] = field(default_factory=list)
+    files: list[PhraseFile] = field(default_factory=list)
+    languages: list[str] = field(default_factory=list)
 
-    logger.info(f"Available languages: {len(available_languages)}")
+    @property
+    def errors(self) -> int:
+        return sum(1 for x in self.reports if x.severity == Severity.ERROR)
 
-    # Parse the english translation, since it doesn't use a subdirectory and is the baseline for all other translations
-    available_languages["en"].files = parse_translations(translation_folder_path)
+    @property
+    def warnings(self) -> int:
+        return sum(1 for x in self.reports if x.severity == Severity.WARNING)
 
-    # Parse the other translations
-    for langid, lang in available_languages.items():
-        if langid == "en":
-            continue
-        lang.files = parse_translations(f"{translation_folder_path}/{langid}")
 
-    reports: dict[str, dict[str, list[Report]]] = defaultdict(lambda: defaultdict(list))
+def display_path(path: pathlib.Path) -> str:
+    """Path relative to the working directory when possible (used for GitHub annotations)."""
+    try:
+        return path.resolve().relative_to(pathlib.Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
-    # Compare the english translation with the other translations
-    english = available_languages["en"]
-    for langid, lang in available_languages.items():
-        if langid == "en":
-            continue
 
-        # See if this language has anything that English doesn't
-        for file in lang.files:
-            english_file = next(
-                (x for x in english.files if x.filename == file.filename), None
+def load_languages(language_cfg_path: str) -> dict[str, str]:
+    nodes = parse(pathlib.Path(language_cfg_path).read_text("utf-8"))
+    section = next((x for x in nodes if x.key == "Languages"), None)
+    if section is None:
+        raise ValueError(f'{language_cfg_path} has no "Languages" section')
+    return {x.key: x.value for x in section.children if x.value is not None}
+
+
+def parse_format(value: str) -> list[int] | None:
+    """Return the parameter indices declared by a "#format" value, or None if invalid."""
+    if not value:
+        return []
+    if not FORMAT_FULL_REGEX.match(value):
+        return None
+    return [int(x) for x in FORMAT_REGEX.findall(value)]
+
+
+class Checker:
+    def __init__(self, known_languages: dict[str, str]) -> None:
+        self.known_languages = known_languages
+        self.reports: list[Report] = []
+
+    def report(
+        self,
+        severity: Severity,
+        message: str,
+        file: PhraseFile,
+        line: int | None = None,
+        langid: str | None = None,
+        phrase_key: str | None = None,
+    ) -> None:
+        self.reports.append(
+            Report(
+                severity, message, file.path, line, langid or file.langid, phrase_key
             )
-            if english_file is None:
-                reports[langid][file.filename].append(
-                    Report(
-                        langid,
-                        file.filename,
-                        file_warning="File doesn't exist in English",
+        )
+
+    def language_name(self, langid: str) -> str:
+        name = self.known_languages.get(langid)
+        return f"{name} ({langid})" if name else langid
+
+    def parse_file(self, file: pathlib.Path, langid: str | None) -> PhraseFile:
+        logger.debug(f"Parsing {file}")
+        phrase_file = PhraseFile(file.name, display_path(file), langid, [])
+        try:
+            nodes = parse(file.read_text("utf-8"))
+        except UnicodeDecodeError as ex:
+            phrase_file.error = str(ex)
+            self.report(Severity.ERROR, f"File is not valid UTF-8: {ex}", phrase_file)
+            return phrase_file
+        except KVSyntaxError as ex:
+            phrase_file.error = ex.message
+            self.report(
+                Severity.ERROR, f"Syntax error: {ex.message}", phrase_file, ex.line
+            )
+            return phrase_file
+
+        root = next((x for x in nodes if x.key == "Phrases" and x.is_section), None)
+        if root is None:
+            phrase_file.error = 'Missing "Phrases" section'
+            self.report(
+                Severity.ERROR,
+                'File does not start with a "Phrases" section',
+                phrase_file,
+                1,
+            )
+            return phrase_file
+
+        for node in root.children:
+            if not node.is_section:
+                self.report(
+                    Severity.ERROR,
+                    f'"{node.key}" should be a phrase section, not a value',
+                    phrase_file,
+                    node.line,
+                    phrase_key=node.key,
+                )
+                continue
+            previous = phrase_file.get(node.key)
+            if previous is not None:
+                self.report(
+                    Severity.ERROR,
+                    f"Duplicate phrase (first defined on line {previous.line})",
+                    phrase_file,
+                    node.line,
+                    phrase_key=node.key,
+                )
+                continue
+            phrase_file.phrases.append(self.parse_phrase(phrase_file, node))
+        return phrase_file
+
+    def parse_phrase(self, file: PhraseFile, node: KVNode) -> Phrase:
+        phrase = Phrase(node.key, node.line, None, None, [])
+        for child in node.children:
+            if child.value is None:
+                self.report(
+                    Severity.ERROR,
+                    f'Unexpected section "{child.key}" inside a phrase',
+                    file,
+                    child.line,
+                    phrase_key=phrase.key,
+                )
+                continue
+            if child.key == "#format":
+                phrase.format = Translation(child.key, child.value, child.line)
+                phrase.format_params = parse_format(child.value)
+                if phrase.format_params is None or sorted(phrase.format_params) != list(
+                    range(1, len(phrase.format_params) + 1)
+                ):
+                    self.report(
+                        Severity.ERROR,
+                        f'Invalid "#format" value "{child.value}" (expected e.g. "{{1:s}},{{2:d}}")',
+                        file,
+                        child.line,
+                        phrase_key=phrase.key,
                     )
-                )
+                    phrase.format_params = None
                 continue
 
+            previous = phrase.get(child.key)
+            if previous is not None:
+                self.report(
+                    Severity.ERROR,
+                    f"Duplicate translation (first defined on line {previous.line})",
+                    file,
+                    child.line,
+                    child.key,
+                    phrase.key,
+                )
+                continue
+            if child.key not in self.known_languages:
+                self.report(
+                    Severity.ERROR,
+                    f'Unknown language "{child.key}"',
+                    file,
+                    child.line,
+                    child.key,
+                    phrase.key,
+                )
+            params = [int(x) for x in PARAM_REGEX.findall(child.value)]
+            phrase.translations.append(
+                Translation(
+                    child.key,
+                    child.value,
+                    child.line,
+                    set(params),
+                    {x for x in params if params.count(x) > 1},
+                )
+            )
+        return phrase
+
+    def check_params(
+        self,
+        file: PhraseFile,
+        phrase_key: str,
+        translation: Translation,
+        format_params: list[int] | None,
+        has_format: bool,
+    ) -> None:
+        def fmt(params: set[int]) -> str:
+            return ", ".join(f"{{{x}}}" for x in sorted(params))
+
+        if not has_format:
+            if translation.params:
+                self.report(
+                    Severity.WARNING,
+                    f'Uses {fmt(translation.params)} but the phrase has no "#format"',
+                    file,
+                    translation.line,
+                    translation.langid,
+                    phrase_key,
+                )
+            return
+        if format_params is None:
+            # "#format" is invalid, already reported
+            return
+
+        declared = set(format_params)
+        repeated = translation.repeated_params & declared
+        if repeated:
+            self.report(
+                Severity.ERROR,
+                f"Uses {fmt(repeated)} more than once, SourceMod only replaces the "
+                "first one and shows the others as is",
+                file,
+                translation.line,
+                translation.langid,
+                phrase_key,
+            )
+        undeclared = translation.params - declared
+        if undeclared:
+            self.report(
+                Severity.ERROR,
+                f'Uses {fmt(undeclared)} but "#format" only declares {len(declared)} '
+                "parameter(s), SourceMod shows it as is",
+                file,
+                translation.line,
+                translation.langid,
+                phrase_key,
+            )
+        unused = declared - translation.params
+        if unused:
+            self.report(
+                Severity.WARNING,
+                f"Does not use format parameter(s) {fmt(unused)}",
+                file,
+                translation.line,
+                translation.langid,
+                phrase_key,
+            )
+
+
+def run(
+    *,
+    language_cfg_path: str,
+    translation_folder_path: str,
+    languages: str = DETECTED,
+) -> Result:
+    """Check a SourceMod translations folder.
+
+    Supports both layouts used by SourceMod: every language inline in
+    ``translations/<file>.txt``, and one subfolder per language
+    (``translations/<langid>/<file>.txt``), as well as a mix of both.
+
+    ``languages`` selects which languages every phrase is expected to be translated to:
+    ``detected`` (languages already used somewhere in the folder), ``all`` (every language
+    in languages.cfg) or a comma-separated list of language ids.
+    """
+    logger.info("Parsing languages.cfg...")
+    known_languages = load_languages(language_cfg_path)
+    logger.info(f"Available languages: {len(known_languages)}")
+
+    checker = Checker(known_languages)
+    root = pathlib.Path(translation_folder_path)
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"Translation folder not found: {translation_folder_path}"
+        )
+
+    # English (and inline translations) live at the root of the translations folder
+    base_files = [
+        checker.parse_file(x, None) for x in sorted(root.glob("*.txt")) if x.is_file()
+    ]
+
+    # Other languages may use a subfolder named after their language id
+    lang_files: dict[str, list[PhraseFile]] = {}
+    for folder in sorted(x for x in root.iterdir() if x.is_dir()):
+        files = sorted(x for x in folder.glob("*.txt") if x.is_file())
+        if not files:
+            continue
+        if folder.name not in known_languages or folder.name == "en":
+            checker.reports.append(
+                Report(
+                    Severity.WARNING,
+                    f'Folder "{folder.name}" is not a known language folder, SourceMod will not load it',
+                    display_path(folder),
+                )
+            )
+            continue
+        lang_files[folder.name] = [checker.parse_file(x, folder.name) for x in files]
+
+    # Which languages must every phrase be translated to
+    if languages == DETECTED:
+        expected = set(lang_files)
+        for file in base_files:
+            for phrase in file.phrases:
+                expected.update(x.langid for x in phrase.translations)
+    elif languages == ALL:
+        expected = set(known_languages)
+    else:
+        expected = {x.strip() for x in languages.split(",") if x.strip()}
+        unknown = sorted(expected - set(known_languages))
+        if unknown:
+            raise ValueError(
+                f"Unknown language(s): {', '.join(unknown)} (see languages.cfg)"
+            )
+    expected = sorted((expected & set(known_languages)) - {"en"})
+
+    # Checks on base files: English presence and parameters of inline translations
+    for file in base_files:
+        for phrase in file.phrases:
+            if phrase.get("en") is None:
+                checker.report(
+                    Severity.ERROR,
+                    "Missing English (en) translation",
+                    file,
+                    phrase.line,
+                    phrase_key=phrase.key,
+                )
+            for translation in phrase.translations:
+                checker.check_params(
+                    file,
+                    phrase.key,
+                    translation,
+                    phrase.format_params,
+                    phrase.format is not None,
+                )
+
+    # Checks on language subfolders against the base files
+    for langid, files in lang_files.items():
+        for file in files:
+            if file.error:
+                continue
+            base_file = next(
+                (x for x in base_files if x.filename == file.filename), None
+            )
+            if base_file is None:
+                checker.report(Severity.WARNING, "File doesn't exist in English", file)
+                continue
             if not file.phrases:
-                reports[langid][file.filename].append(
-                    Report(langid, file.filename, file_warning="File is empty")
-                )
+                checker.report(Severity.WARNING, "File is empty", file)
                 continue
-
             for phrase in file.phrases:
                 if phrase.format:
-                    reports[langid][file.filename].append(
-                        Report(
-                            langid,
-                            file.filename,
-                            phrase_key=phrase.key,
-                            phrase_warning='Includes a "#format" key',
-                        )
+                    checker.report(
+                        Severity.WARNING,
+                        'Includes a "#format" key, it belongs in the English file only',
+                        file,
+                        phrase.format.line,
+                        phrase_key=phrase.key,
                     )
-                english_phrase = next(
-                    (x for x in english_file.phrases if x.key == phrase.key), None
-                )
-                if english_phrase is None:
-                    # look for this phrase in a different english file
-                    warning = "Phrase doesn't exist in English"
-                    for other_file in english.files:
-                        other_phrase = next(
-                            (x for x in other_file.phrases if x.key == phrase.key), None
-                        )
-                        if other_phrase:
-                            warning = f"Phrase exists in a different file in English: {other_file.filename}"
-                            break
-                    reports[langid][file.filename].append(
-                        Report(
-                            langid,
-                            file.filename,
-                            phrase_key=phrase.key,
-                            phrase_warning=warning,
-                        )
+                base_phrase = base_file.get(phrase.key)
+                if base_phrase is None:
+                    message = "Phrase doesn't exist in English"
+                    other = next((x for x in base_files if x.get(phrase.key)), None)
+                    if other is not None:
+                        message = f"Phrase exists in a different file in English: {other.filename}"
+                    checker.report(
+                        Severity.WARNING,
+                        message,
+                        file,
+                        phrase.line,
+                        phrase_key=phrase.key,
                     )
                     continue
-                translation_found = False
                 for translation in phrase.translations:
-                    if translation.langid == langid:
-                        translation_found = True
-                    else:
-                        reports[langid][file.filename].append(
-                            Report(
-                                langid,
-                                file.filename,
-                                phrase_key=phrase.key,
-                                phrase_warning=f'Includes a translation for language "{translation.langid}"',
+                    if translation.langid != langid:
+                        # SourceMod reads the language from the key, not from the folder.
+                        # Unknown keys are ignored and already reported.
+                        if translation.langid in known_languages:
+                            checker.report(
+                                Severity.ERROR,
+                                f"Uses the {checker.language_name(translation.langid)} key in "
+                                f"the {checker.language_name(langid)} folder, SourceMod loads it "
+                                f"as the {translation.langid} translation",
+                                file,
+                                translation.line,
+                                translation.langid,
+                                phrase.key,
                             )
-                        )
-                    if (
-                        english_phrase.format
-                        and translation.param_count != english_phrase.format.param_count
-                    ):
-                        reports[langid][file.filename].append(
-                            Report(
-                                langid,
-                                file.filename,
-                                phrase_key=phrase.key,
-                                phrase_warning=f"Has {translation.param_count} format parameters, but English has {english_phrase.format.param_count}",
-                            )
-                        )
-                if not translation_found:
-                    reports[langid][file.filename].append(
-                        Report(
-                            langid,
-                            file.filename,
+                        continue
+                    if base_phrase.get(langid) is not None:
+                        checker.report(
+                            Severity.WARNING,
+                            f"Translation is also defined inline in {base_file.path}",
+                            file,
+                            translation.line,
                             phrase_key=phrase.key,
-                            phrase_warning="Phrase available, but translation missing",
                         )
+                    checker.check_params(
+                        file,
+                        phrase.key,
+                        translation,
+                        base_phrase.format_params,
+                        base_phrase.format is not None,
                     )
 
-        # See if this language is missing anything that English has
-        for file in english.files:
+    # Missing translations for the expected languages
+    for file in base_files:
+        if file.error or not file.phrases:
+            continue
+        for langid in expected:
             lang_file = next(
-                (x for x in lang.files if x.filename == file.filename), None
+                (x for x in lang_files.get(langid, []) if x.filename == file.filename),
+                None,
             )
-            if lang_file is None:
-                reports[langid][file.filename].append(
-                    Report(langid, file.filename, file_warning="File missing")
-                )
+            if lang_file is not None and lang_file.error:
                 continue
-
-            # The file doesn't contain any phrases. We reported that already, so don't spam every single missing phrase
-            if not lang_file.phrases:
-                continue
-
+            missing: list[Phrase] = []
             for phrase in file.phrases:
-                lang_phrase = next(
-                    (x for x in lang_file.phrases if x.key == phrase.key), None
+                if phrase.get("en") is None or phrase.get(langid) is not None:
+                    continue
+                lang_phrase = lang_file.get(phrase.key) if lang_file else None
+                if lang_phrase is None or lang_phrase.get(langid) is None:
+                    missing.append(phrase)
+            if not missing:
+                continue
+            if len(missing) == len(file.phrases) and len(missing) > 1:
+                checker.report(
+                    Severity.WARNING,
+                    f"No {checker.language_name(langid)} translation for any phrase",
+                    file,
+                    langid=langid,
                 )
-                if lang_phrase is None:
-                    reports[langid][file.filename].append(
-                        Report(
-                            langid,
-                            file.filename,
-                            phrase_key=phrase.key,
-                            phrase_warning="Phrase missing",
-                        )
-                    )
+                continue
+            for phrase in missing:
+                checker.report(
+                    Severity.WARNING,
+                    f"Missing {checker.language_name(langid)} translation",
+                    file,
+                    phrase.line,
+                    langid,
+                    phrase.key,
+                )
 
-        if langid not in reports:
-            logger.info(f"No issues found for {lang.name} ({langid})")
-        else:
-            logger.error(
-                f"Found {len(reports[langid])} issues for {lang.name} ({langid})"
-            )
-
-    # Generate the report markdown for the project draft issues
-    for langid, lang in available_languages.items():
-        markdown = ""
-
-        if langid in reports:
-            print(f"Generating report for {lang.name} ({langid})...")
-            for filename, problems in reports[langid].items():
-                markdown += f"## [{filename}](https://github.com/alliedmodders/sourcemod/blob/master/translations/{langid}/{filename})\n"
-                added_phrase_warning = False
-                for report in problems:
-                    if report.file_warning:
-                        markdown += f"**{report.file_warning}**\n"
-                        print(f"  {report.file_warning} ({report.filename})")
-                    if report.phrase_warning:
-                        if not added_phrase_warning:
-                            markdown += "| Phrase | Issue |\n| ------- | --------- |\n"
-                            added_phrase_warning = True
-                        markdown += (
-                            f"| `{report.phrase_key}` | {report.phrase_warning} |\n"
-                        )
-                        print(
-                            f'  {report.filename}: "{report.phrase_key}" -> {report.phrase_warning}'
-                        )
-                markdown += "\n"
-        else:
-            markdown = "No issues found"
+    all_files = base_files + [x for files in lang_files.values() for x in files]
+    reports = sorted(checker.reports, key=lambda x: (x.path, x.line or 0))
+    return Result(reports, all_files, ["en", *expected])
